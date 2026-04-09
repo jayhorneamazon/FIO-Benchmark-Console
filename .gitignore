@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build output
+dist/
+cdk.out/
+*.js
+*.d.ts
+*.js.map
+!vite.config.ts
+!jest.config.ts
+
+# Environment files
+.env.local
+.env.*.local
+frontend/.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CDK context (contains account-specific lookups)
+infrastructure/cdk.context.json

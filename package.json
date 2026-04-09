@@ -1,0 +1,11 @@
+{
+  "name": "fio-bench-console",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "backend",
+    "frontend",
+    "infrastructure"
+  ]
+}
