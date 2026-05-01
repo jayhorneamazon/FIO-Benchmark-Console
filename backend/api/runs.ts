@@ -262,6 +262,38 @@ export async function cancelRun(event: APIGatewayProxyEventV2): Promise<APIGatew
   return json(200, { message: 'Run cancellation requested', runId });
 }
 
+/** DELETE /runs/:id — Delete a run and all its node records */
+export async function deleteRun(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
+  const runId = event.pathParameters?.id;
+  if (!runId) return json(400, { error: 'Run ID required' });
+
+  // Query all items for this run (META + NODE# records)
+  const result = await ddb.send(new QueryCommand({
+    TableName: TABLE_NAME,
+    KeyConditionExpression: 'PK = :pk',
+    ExpressionAttributeValues: { ':pk': `RUN#${runId}` },
+    ProjectionExpression: 'PK, SK',
+  }));
+
+  const items = result.Items || [];
+  if (items.length === 0) return json(404, { error: 'Run not found' });
+
+  // Delete all items in batches of 25 (DynamoDB BatchWriteItem limit)
+  const { BatchWriteCommand } = await import('@aws-sdk/lib-dynamodb');
+  for (let i = 0; i < items.length; i += 25) {
+    const batch = items.slice(i, i + 25);
+    await ddb.send(new BatchWriteCommand({
+      RequestItems: {
+        [TABLE_NAME]: batch.map(item => ({
+          DeleteRequest: { Key: { PK: item.PK, SK: item.SK } },
+        })),
+      },
+    }));
+  }
+
+  return json(200, { message: `Deleted run ${runId} (${items.length} records)`, runId });
+}
+
 /** GET /runs/compare?ids=a,b,c — Get comparison data for multiple runs */
 export async function compareRuns(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const ids = (event.queryStringParameters?.ids || '').split(',').filter(Boolean);

@@ -29,3 +29,14 @@ Thumbs.db
 
 # CDK context (contains account-specific lookups)
 infrastructure/cdk.context.json
+
+# SSH keys
+fio-console-key
+fio-console-key.pub
+*.pem
+
+# Test harness (not part of the main project)
+test-harness/
+
+# Obsolete files
+backend/orchestration/state-machine.asl.json

@@ -461,3 +461,6 @@ pre, .code-block, .mount-preview, .job-file-preview {
 .ec2-stopping { background: #2d2d1a; color: var(--color-warning); }
 .ec2-check-ok { background: #1a3a2a; color: var(--color-success); }
 .ec2-check-initializing { background: #2d2d1a; color: var(--color-warning); }
+
+/* --- Selected row --- */
+.runs-table tr.row-selected td { background: rgba(79, 143, 247, 0.08); }

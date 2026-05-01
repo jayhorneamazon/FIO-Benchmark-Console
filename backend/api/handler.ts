@@ -4,7 +4,7 @@
  */
 
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { createRun, listRuns, getRun, cancelRun, compareRuns } from './runs';
+import { createRun, listRuns, getRun, cancelRun, compareRuns, deleteRun } from './runs';
 import { getSummary, getTrends, getHistogram, customQuery } from './analytics';
 
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
@@ -42,6 +42,11 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     // POST /runs/:id/cancel
     if (method === 'POST' && path.match(/^\/runs\/[^/]+\/cancel$/)) {
       return await cancelRun(event);
+    }
+
+    // DELETE /runs/:id
+    if (method === 'DELETE' && path.match(/^\/runs\/[^/]+$/)) {
+      return await deleteRun(event);
     }
 
     return {

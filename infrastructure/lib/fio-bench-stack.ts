@@ -620,6 +620,7 @@ export class FioBenchStack extends cdk.Stack {
         allowMethods: [
           apigwv2.CorsHttpMethod.GET,
           apigwv2.CorsHttpMethod.POST,
+          apigwv2.CorsHttpMethod.DELETE,
           apigwv2.CorsHttpMethod.OPTIONS,
         ],
         allowHeaders: ['Content-Type', 'Authorization'],
@@ -646,7 +647,7 @@ export class FioBenchStack extends cdk.Stack {
     });
     httpApi.addRoutes({
       path: '/runs/{id}',
-      methods: [apigwv2.HttpMethod.GET],
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.DELETE],
       integration: apiIntegration,
       authorizer: jwtAuthorizer,
     });

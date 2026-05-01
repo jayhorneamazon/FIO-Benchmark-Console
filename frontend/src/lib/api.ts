@@ -109,6 +109,20 @@ export const api = {
     return request(`/runs/${runId}/cancel`, { method: 'POST' });
   },
 
+  deleteRun(runId: string): Promise<{ message: string }> {
+    return request(`/runs/${runId}`, { method: 'DELETE' });
+  },
+
+  deleteRuns(runIds: string[]): Promise<{ results: Array<{ runId: string; success: boolean; error?: string }> }> {
+    return Promise.all(
+      runIds.map(id =>
+        request<{ message: string }>(`/runs/${id}`, { method: 'DELETE' })
+          .then(() => ({ runId: id, success: true }))
+          .catch(err => ({ runId: id, success: false, error: err.message }))
+      )
+    ).then(results => ({ results }));
+  },
+
   compareRuns(ids: string[]): Promise<{ runs: BenchmarkRun[] }> {
     return request(`/runs/compare?ids=${ids.join(',')}`);
   },

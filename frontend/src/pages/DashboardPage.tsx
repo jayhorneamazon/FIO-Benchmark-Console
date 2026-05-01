@@ -30,14 +30,17 @@ export const DashboardPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
   const navigate = useNavigate();
 
-  useEffect(() => {
+  const fetchRuns = () => {
     api.listRuns(100)
       .then(res => setRuns(res.runs))
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  };
+
+  useEffect(() => { fetchRuns(); }, []);
 
   const toggleSelect = (id: string) => {
     setSelectedIds(prev => {
@@ -48,9 +51,46 @@ export const DashboardPage: React.FC = () => {
     });
   };
 
+  const toggleSelectAll = () => {
+    if (selectedIds.size === runs.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(runs.map(r => r.runId)));
+    }
+  };
+
   const compareSelected = () => {
     if (selectedIds.size >= 2) {
       navigate(`/compare?ids=${Array.from(selectedIds).join(',')}`);
+    }
+  };
+
+  const deleteSelected = async () => {
+    const count = selectedIds.size;
+    const activeRuns = runs.filter(r => selectedIds.has(r.runId) && ['pending', 'scaling', 'running'].includes(r.status));
+
+    let message = `Delete ${count} run${count > 1 ? 's' : ''}?`;
+    if (activeRuns.length > 0) {
+      message += ` (${activeRuns.length} still active - they will be removed from the database but worker nodes may still be running)`;
+    }
+    message += ' This cannot be undone.';
+
+    if (!confirm(message)) return;
+
+    setDeleting(true);
+    setError(null);
+    try {
+      const result = await api.deleteRuns(Array.from(selectedIds));
+      const failed = result.results.filter(r => !r.success);
+      if (failed.length > 0) {
+        setError(`Failed to delete ${failed.length} run(s): ${failed.map(f => f.error).join(', ')}`);
+      }
+      setSelectedIds(new Set());
+      fetchRuns();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Delete failed');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -62,6 +102,15 @@ export const DashboardPage: React.FC = () => {
       <div className="page-header">
         <h2>Benchmark Runs</h2>
         <div className="page-actions">
+          {selectedIds.size > 0 && (
+            <button
+              onClick={deleteSelected}
+              className="btn btn-danger"
+              disabled={deleting}
+            >
+              {deleting ? 'Deleting...' : `Delete (${selectedIds.size})`}
+            </button>
+          )}
           {selectedIds.size >= 2 && (
             <button onClick={compareSelected} className="btn btn-secondary">
               Compare ({selectedIds.size})
@@ -80,7 +129,14 @@ export const DashboardPage: React.FC = () => {
         <table className="runs-table">
           <thead>
             <tr>
-              <th className="col-select" aria-label="Select for comparison"></th>
+              <th className="col-select">
+                <input
+                  type="checkbox"
+                  checked={selectedIds.size === runs.length && runs.length > 0}
+                  onChange={toggleSelectAll}
+                  aria-label="Select all runs"
+                />
+              </th>
               <th>Name</th>
               <th>Status</th>
               <th>Nodes</th>
@@ -97,13 +153,13 @@ export const DashboardPage: React.FC = () => {
               const status = STATUS_LABELS[run.status] || { label: run.status, className: '' };
               const job = run.config.fioJobs[0];
               return (
-                <tr key={run.runId}>
+                <tr key={run.runId} className={selectedIds.has(run.runId) ? 'row-selected' : ''}>
                   <td className="col-select">
                     <input
                       type="checkbox"
                       checked={selectedIds.has(run.runId)}
                       onChange={() => toggleSelect(run.runId)}
-                      aria-label={`Select ${run.name} for comparison`}
+                      aria-label={`Select ${run.name}`}
                     />
                   </td>
                   <td>
@@ -113,10 +169,10 @@ export const DashboardPage: React.FC = () => {
                   </td>
                   <td><span className={`status-badge ${status.className}`}>{status.label}</span></td>
                   <td>{run.config.infra.nodeCount}</td>
-                  <td>{job ? `${job.rw} ${job.bs}` : '—'}</td>
+                  <td>{job ? `${job.rw} ${job.bs}` : '\u2014'}</td>
                   <td>v{run.config.nfs.nfsVersion}</td>
-                  <td>{run.results ? run.results.totalIops.toLocaleString() : '—'}</td>
-                  <td>{run.results ? formatBw(run.results.totalBwKib) : '—'}</td>
+                  <td>{run.results ? run.results.totalIops.toLocaleString() : '\u2014'}</td>
+                  <td>{run.results ? formatBw(run.results.totalBwKib) : '\u2014'}</td>
                   <td>{formatDate(run.createdAt)}</td>
                   <td>
                     {run.tags.map(t => (
