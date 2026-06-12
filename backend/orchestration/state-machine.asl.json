@@ -1,0 +1,180 @@
+{
+  "Comment": "FIO Benchmark Run Lifecycle Orchestration",
+  "StartAt": "UpdateStatusScaling",
+  "States": {
+    "UpdateStatusScaling": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName.$": "$.tableNameParam",
+        "Key": {
+          "PK": { "S.$": "States.Format('RUN#{}', $.runId)" },
+          "SK": { "S": "META" }
+        },
+        "UpdateExpression": "SET #s = :s, startedAt = :t",
+        "ExpressionAttributeNames": { "#s": "status" },
+        "ExpressionAttributeValues": {
+          ":s": { "S": "scaling" },
+          ":t": { "S.$": "$$.State.EnteredTime" }
+        }
+      },
+      "ResultPath": null,
+      "Next": "SetSSMParameters"
+    },
+    "SetSSMParameters": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.setParamsLambdaArn",
+        "Payload": {
+          "runId.$": "$.runId",
+          "resultsS3Prefix.$": "$.resultsS3Prefix",
+          "mountCommand.$": "$.mountCommand"
+        }
+      },
+      "ResultPath": null,
+      "Next": "ScaleUpASG"
+    },
+    "ScaleUpASG": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.scaleAsgLambdaArn",
+        "Payload": {
+          "action": "scale-up",
+          "desiredCapacity.$": "$.config.infra.nodeCount",
+          "instanceType.$": "$.config.infra.instanceType",
+          "useSpot.$": "$.config.infra.useSpot"
+        }
+      },
+      "ResultPath": "$.scaleResult",
+      "Next": "WaitForNodes"
+    },
+    "WaitForNodes": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.checkNodesLambdaArn",
+        "Payload": {
+          "runId.$": "$.runId",
+          "expectedCount.$": "$.config.infra.nodeCount"
+        }
+      },
+      "ResultPath": "$.nodeCheck",
+      "Next": "AllNodesReady?"
+    },
+    "AllNodesReady?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.nodeCheck.Payload.allCompleted",
+          "BooleanEquals": true,
+          "Next": "AggregateResults"
+        },
+        {
+          "Variable": "$.nodeCheck.Payload.anyFailed",
+          "BooleanEquals": true,
+          "Next": "HandleFailure"
+        }
+      ],
+      "Default": "WaitInterval"
+    },
+    "WaitInterval": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "CheckCancellation"
+    },
+    "CheckCancellation": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Parameters": {
+        "TableName.$": "$.tableNameParam",
+        "Key": {
+          "PK": { "S.$": "States.Format('RUN#{}', $.runId)" },
+          "SK": { "S": "META" }
+        },
+        "ProjectionExpression": "#s",
+        "ExpressionAttributeNames": { "#s": "status" }
+      },
+      "ResultPath": "$.cancelCheck",
+      "Next": "IsCancelled?"
+    },
+    "IsCancelled?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancelCheck.Item.status.S",
+          "StringEquals": "cancelled",
+          "Next": "ScaleDownASG"
+        }
+      ],
+      "Default": "WaitForNodes"
+    },
+    "AggregateResults": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.aggregateLambdaArn",
+        "Payload": {
+          "runId.$": "$.runId",
+          "resultsS3Prefix.$": "$.resultsS3Prefix"
+        }
+      },
+      "ResultPath": "$.aggregation",
+      "Next": "CleanupNodes"
+    },
+    "CleanupNodes": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.cleanupLambdaArn",
+        "Payload": {
+          "runId.$": "$.runId"
+        }
+      },
+      "ResultPath": "$.cleanup",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.cleanupError",
+          "Next": "ScaleDownASG"
+        }
+      ],
+      "Next": "ScaleDownASG"
+    },
+    "ScaleDownASG": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.scaleAsgLambdaArn",
+        "Payload": {
+          "action": "scale-down"
+        }
+      },
+      "ResultPath": null,
+      "Next": "Done"
+    },
+    "HandleFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName.$": "$.tableNameParam",
+        "Key": {
+          "PK": { "S.$": "States.Format('RUN#{}', $.runId)" },
+          "SK": { "S": "META" }
+        },
+        "UpdateExpression": "SET #s = :s, #e = :e",
+        "ExpressionAttributeNames": { "#s": "status", "#e": "error" },
+        "ExpressionAttributeValues": {
+          ":s": { "S": "failed" },
+          ":e": { "S": "One or more worker nodes failed" }
+        }
+      },
+      "ResultPath": null,
+      "Next": "ScaleDownASG"
+    },
+    "Done": {
+      "Type": "Succeed"
+    }
+  }
+}

@@ -1,6 +1,10 @@
 /**
  * Lambda: Check the status of all worker nodes for a given run.
  *
+ * Partial failure tolerance: if some nodes fail but at least one completes
+ * successfully, the run proceeds to aggregation with the available results.
+ * The run only fails entirely if ALL nodes fail (nothing to aggregate).
+ *
  * Handles two stuck-node scenarios:
  * 1. Nodes that never reported to DynamoDB at all (bootstrap crashed early)
  * 2. Nodes that reported "running" but never moved to "completed"/"failed"
@@ -70,8 +74,12 @@ export async function handler(event: Event): Promise<Result> {
   // All reported nodes are in a terminal state and all expected nodes reported
   const allReportedTerminal = (completedCount + failedCount) === totalReported;
   if (allReportedTerminal && totalReported >= expectedCount) {
-    // All nodes finished but some failed
-    return { allCompleted: false, anyFailed: failedCount > 0, completedCount, failedCount, runningCount, totalReported };
+    if (completedCount > 0) {
+      // Some nodes succeeded — proceed with partial results
+      return { allCompleted: true, anyFailed: false, completedCount, failedCount, runningCount, totalReported };
+    }
+    // Every single node failed — nothing to aggregate
+    return { allCompleted: false, anyFailed: true, completedCount, failedCount, runningCount, totalReported };
   }
 
   // Some nodes are still running or haven't reported — check for stragglers
