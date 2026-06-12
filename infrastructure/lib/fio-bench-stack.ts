@@ -398,6 +398,29 @@ export class FioBenchStack extends cdk.Stack {
     resultsBucket.grantRead(aggregateFn);
     resultsBucket.grantPut(aggregateFn);
 
+    const cleanupNodesFn = new nodejs.NodejsFunction(this, 'CleanupNodesFn', {
+      ...commonLambdaProps,
+      entry: path.join(backendDir, 'orchestration/cleanup-nodes.ts'),
+      handler: 'handler',
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 128,
+      environment: {
+        ASG_NAME: asg.autoScalingGroupName,
+      },
+    });
+    // DescribeAutoScalingGroups does not support resource-level permissions
+    cleanupNodesFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['autoscaling:DescribeAutoScalingGroups'],
+      resources: ['*'],
+    }));
+    cleanupNodesFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ssm:SendCommand'],
+      resources: [
+        `arn:aws:ssm:${this.region}::document/AWS-RunShellScript`,
+        `arn:aws:ec2:${this.region}:${this.account}:instance/*`,
+      ],
+    }));
+
     // ================================================================
     // STEP FUNCTIONS — Run Lifecycle Orchestration
     // ================================================================
@@ -489,6 +512,15 @@ export class FioBenchStack extends cdk.Stack {
       resultPath: sfn.JsonPath.DISCARD,
     });
 
+    // Step 7b: Clean up benchmark files on nodes after results are gathered
+    const cleanupNodes = new tasks.LambdaInvoke(this, 'CleanupNodes', {
+      lambdaFunction: cleanupNodesFn,
+      payload: sfn.TaskInput.fromObject({
+        runId: sfn.JsonPath.stringAt('$.runId'),
+      }),
+      resultPath: sfn.JsonPath.DISCARD,
+    });
+
     // Step 8: Scale down ASG (always, even on failure)
     const scaleDown = new tasks.LambdaInvoke(this, 'ScaleDownASG', {
       lambdaFunction: scaleAsgFn,
@@ -536,7 +568,9 @@ export class FioBenchStack extends cdk.Stack {
 
     waitInterval.next(checkCancellation).next(isCancelled);
     aggregateResults.addCatch(markFailed, { resultPath: '$.aggregationError' });
-    aggregateResults.next(scaleDown);
+    aggregateResults.next(cleanupNodes);
+    cleanupNodes.addCatch(scaleDown, { resultPath: '$.cleanupError' });
+    cleanupNodes.next(scaleDown);
     markFailed.next(scaleDown);
     scaleDown.next(succeed);
 
