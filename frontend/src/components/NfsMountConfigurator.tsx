@@ -6,8 +6,9 @@
 
 import React from 'react';
 import {
-  NfsMountConfig, NfsVersion, NfsTransport, NfsMountHardness, NfsSecurityFlavor,
-  buildMountCommand,
+  NfsMountConfig, NfsMountMode, NfsAdditionalExport,
+  NfsVersion, NfsTransport, NfsMountHardness, NfsSecurityFlavor,
+  buildMountCommand, buildAllMountCommands,
 } from '@shared/types/nfs-config';
 
 interface Props {
@@ -256,19 +257,130 @@ export const NfsMountConfigurator: React.FC<Props> = ({ config, onChange, warnin
         </fieldset>
       )}
 
+      {/* Multi-Export Mode */}
+      <fieldset>
+        <legend>Export Distribution</legend>
+        <label className="radio-option">
+          <input
+            type="radio"
+            name="mountMode"
+            value="single"
+            checked={config.mountMode !== 'multi-export'}
+            onChange={() => update({ mountMode: 'single', additionalExports: undefined })}
+          />
+          <span className="radio-label">
+            <strong>Single Export</strong>
+            <span className="radio-description">
+              All FIO jobs target one NFS export. Standard benchmark mode.
+            </span>
+          </span>
+        </label>
+        <label className="radio-option">
+          <input
+            type="radio"
+            name="mountMode"
+            value="multi-export"
+            checked={config.mountMode === 'multi-export'}
+            onChange={() => update({
+              mountMode: 'multi-export',
+              additionalExports: config.additionalExports?.length
+                ? config.additionalExports
+                : [{ exportPath: '' }],
+            })}
+          />
+          <span className="radio-label">
+            <strong>Multi-Export</strong>
+            <span className="radio-description">
+              Spread FIO jobs across multiple exports from the same server.
+              Compare single-export vs multi-export performance by running both modes and using the comparison page.
+            </span>
+          </span>
+        </label>
+
+        {config.mountMode === 'multi-export' && (
+          <div className="multi-export-config">
+            <p className="help-text">
+              Add additional exports from <strong>{config.server || 'the NFS server'}</strong>.
+              FIO jobs will be evenly distributed across all exports (primary + additional).
+            </p>
+
+            {(config.additionalExports || []).map((exp, idx) => (
+              <div key={idx} className="additional-export-row">
+                <label>
+                  Export path #{idx + 2}
+                  <input
+                    type="text"
+                    value={exp.exportPath}
+                    onChange={e => {
+                      const updated = [...(config.additionalExports || [])];
+                      updated[idx] = { ...updated[idx], exportPath: e.target.value };
+                      update({ additionalExports: updated });
+                    }}
+                    placeholder={`/export/vol${idx + 2}`}
+                  />
+                </label>
+                <label>
+                  Mount point (optional)
+                  <input
+                    type="text"
+                    value={exp.mountPoint || ''}
+                    onChange={e => {
+                      const updated = [...(config.additionalExports || [])];
+                      updated[idx] = { ...updated[idx], mountPoint: e.target.value || undefined };
+                      update({ additionalExports: updated });
+                    }}
+                    placeholder={`${config.mountPoint || '/mnt/benchmark'}-${idx + 1}`}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="remove-btn"
+                  onClick={() => {
+                    const updated = (config.additionalExports || []).filter((_, i) => i !== idx);
+                    update({ additionalExports: updated.length ? updated : [{ exportPath: '' }] });
+                  }}
+                  aria-label={`Remove export #${idx + 2}`}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+
+            <button
+              type="button"
+              className="add-export-btn"
+              onClick={() => {
+                const updated = [...(config.additionalExports || []), { exportPath: '' }];
+                update({ additionalExports: updated });
+              }}
+            >
+              + Add Export
+            </button>
+
+            <div className="multi-export-summary" role="status">
+              Total exports: {1 + (config.additionalExports?.length || 0)} (primary + {config.additionalExports?.length || 0} additional)
+            </div>
+          </div>
+        )}
+      </fieldset>
+
       {/* Generated mount command preview */}
       <fieldset>
-        <legend>Generated Mount Command</legend>
+        <legend>Generated Mount Command{config.mountMode === 'multi-export' ? 's' : ''}</legend>
         <pre className="mount-preview">
-          {buildPreviewCommand(config)}
+          {buildPreviewCommands(config)}
         </pre>
       </fieldset>
     </div>
   );
 };
 
-function buildPreviewCommand(config: NfsMountConfig): string {
+function buildPreviewCommands(config: NfsMountConfig): string {
   try {
+    if (config.mountMode === 'multi-export') {
+      const commands = buildAllMountCommands(config);
+      return commands.map((cmd, i) => `# Export ${i + 1}\n${cmd}`).join('\n\n');
+    }
     return buildMountCommand(config);
   } catch {
     return '# Configure server and export path to see mount command';

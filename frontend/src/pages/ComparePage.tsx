@@ -70,6 +70,13 @@ export const ComparePage: React.FC = () => {
           </thead>
           <tbody>
             <DiffRow label="NFS Version" runs={completedRuns} extract={r => `v${r.config.nfs.nfsVersion}`} />
+            <DiffRow label="Mount Mode" runs={completedRuns} extract={r => r.config.nfs.mountMode === 'multi-export' ? 'Multi-export' : 'Single export'} />
+            <DiffRow label="Export Count" runs={completedRuns} extract={r => {
+              if (r.config.nfs.mountMode === 'multi-export' && r.config.nfs.additionalExports) {
+                return String(1 + r.config.nfs.additionalExports.length);
+              }
+              return '1';
+            }} />
             <DiffRow label="rsize" runs={completedRuns} extract={r => String(r.config.nfs.rsize || 'default')} />
             <DiffRow label="wsize" runs={completedRuns} extract={r => String(r.config.nfs.wsize || 'default')} />
             <DiffRow label="nconnect" runs={completedRuns} extract={r => String(r.config.nfs.nconnect || 1)} />
@@ -82,6 +89,9 @@ export const ComparePage: React.FC = () => {
           </tbody>
         </table>
       </section>
+
+      {/* Multi-export comparison insight */}
+      <MultiExportInsight runs={completedRuns} />
 
       {/* Results comparison */}
       <section className="results-section">
@@ -114,5 +124,74 @@ const DiffRow: React.FC<{
         <td key={runs[i].runId} className={allSame ? '' : 'diff-cell'}>{v}</td>
       ))}
     </tr>
+  );
+};
+
+/** Shows analysis when comparing single-export vs multi-export runs */
+const MultiExportInsight: React.FC<{ runs: BenchmarkRun[] }> = ({ runs }) => {
+  const singleRuns = runs.filter(r => r.config.nfs.mountMode !== 'multi-export');
+  const multiRuns = runs.filter(r => r.config.nfs.mountMode === 'multi-export');
+
+  // Only show if there's at least one of each mode
+  if (singleRuns.length === 0 || multiRuns.length === 0) return null;
+
+  const bestSingle = singleRuns.reduce((a, b) =>
+    (a.results?.totalIops || 0) > (b.results?.totalIops || 0) ? a : b
+  );
+  const bestMulti = multiRuns.reduce((a, b) =>
+    (a.results?.totalIops || 0) > (b.results?.totalIops || 0) ? a : b
+  );
+
+  const singleIops = bestSingle.results?.totalIops || 0;
+  const multiIops = bestMulti.results?.totalIops || 0;
+  const singleBw = bestSingle.results?.totalBwKib || 0;
+  const multiBw = bestMulti.results?.totalBwKib || 0;
+
+  const iopsGain = singleIops > 0 ? ((multiIops - singleIops) / singleIops * 100).toFixed(1) : '—';
+  const bwGain = singleBw > 0 ? ((multiBw - singleBw) / singleBw * 100).toFixed(1) : '—';
+
+  const multiExportCount = 1 + (bestMulti.config.nfs.additionalExports?.length || 0);
+
+  const singleP50 = bestSingle.results?.latencyPercentiles.p50 || 0;
+  const multiP50 = bestMulti.results?.latencyPercentiles.p50 || 0;
+  const latencyChange = singleP50 > 0 ? ((multiP50 - singleP50) / singleP50 * 100).toFixed(1) : '—';
+
+  return (
+    <section className="multi-export-insight">
+      <h3>Multi-Export Comparison</h3>
+      <p className="insight-description">
+        Comparing single export vs {multiExportCount} exports from the same server.
+        Same total numjobs — testing whether spreading work across exports improves throughput.
+      </p>
+      <div className="insight-metrics">
+        <div className="insight-card">
+          <span className="insight-label">IOPS Change</span>
+          <span className={`insight-value ${Number(iopsGain) > 0 ? 'positive' : 'negative'}`}>
+            {Number(iopsGain) > 0 ? '+' : ''}{iopsGain}%
+          </span>
+          <span className="insight-detail">
+            {singleIops.toLocaleString()} → {multiIops.toLocaleString()}
+          </span>
+        </div>
+        <div className="insight-card">
+          <span className="insight-label">Bandwidth Change</span>
+          <span className={`insight-value ${Number(bwGain) > 0 ? 'positive' : 'negative'}`}>
+            {Number(bwGain) > 0 ? '+' : ''}{bwGain}%
+          </span>
+          <span className="insight-detail">
+            {(singleBw / 1024).toFixed(1)} MiB/s → {(multiBw / 1024).toFixed(1)} MiB/s
+          </span>
+        </div>
+        <div className="insight-card">
+          <span className="insight-label">p50 Latency Change</span>
+          <span className={`insight-value ${Number(latencyChange) < 0 ? 'positive' : 'negative'}`}>
+            {Number(latencyChange) > 0 ? '+' : ''}{latencyChange}%
+          </span>
+          <span className="insight-detail">
+            {(singleP50 / 1000).toFixed(1)}μs → {(multiP50 / 1000).toFixed(1)}μs
+          </span>
+        </div>
+      </div>
+    </section>
   );
 };

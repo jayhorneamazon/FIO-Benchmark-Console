@@ -121,8 +121,11 @@ export interface BenchmarkRun {
   /** Generated .fio job file content */
   jobFileContent: string;
 
-  /** Generated mount command */
+  /** Generated mount command (primary, for backwards compatibility) */
   mountCommand: string;
+
+  /** All mount commands (primary + additional exports). Present when mountMode is 'multi-export'. */
+  mountCommands?: string[];
 
   /** Per-node status tracking */
   nodes: NodeStatus[];

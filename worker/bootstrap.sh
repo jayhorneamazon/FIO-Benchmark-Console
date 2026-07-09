@@ -34,6 +34,31 @@ MOUNT_COMMAND=$(get_param "mount-command")
 STATUS_TABLE=$(get_param "status-table")
 MOUNT_POINT=$(echo "$MOUNT_COMMAND" | awk '{print $NF}')
 
+# Multi-export mode: try to fetch the mount-commands JSON array.
+# If present, we mount multiple exports and distribute FIO jobs across them.
+MOUNT_COMMANDS_JSON=$(get_param "mount-commands" 2>/dev/null || echo "")
+MULTI_EXPORT=0
+declare -a ALL_MOUNT_POINTS=()
+
+if [ -n "$MOUNT_COMMANDS_JSON" ] && [ "$MOUNT_COMMANDS_JSON" != "None" ]; then
+  MULTI_EXPORT=1
+  # Parse JSON array of mount commands using python (available on AL2023)
+  mapfile -t ALL_MOUNT_CMDS < <(echo "$MOUNT_COMMANDS_JSON" | python3 -c "
+import sys, json
+cmds = json.load(sys.stdin)
+for c in cmds:
+    print(c)
+")
+  # Extract mount points (last arg of each command)
+  for cmd in "${ALL_MOUNT_CMDS[@]}"; do
+    mp=$(echo "$cmd" | awk '{print $NF}')
+    ALL_MOUNT_POINTS+=("$mp")
+  done
+  log "Multi-export mode: ${#ALL_MOUNT_CMDS[@]} exports to mount"
+else
+  ALL_MOUNT_POINTS=("$MOUNT_POINT")
+fi
+
 NODE_ID="${INSTANCE_ID}"
 
 log() {
@@ -136,40 +161,93 @@ log "NFS utilities installed: $(which mount.nfs 2>/dev/null || which mount.nfs4 
 
 # --- Mount NFS ---
 report_status "mounting"
-log "Mounting NFS: $MOUNT_COMMAND"
-mkdir -p "$MOUNT_POINT"
 
-if ! eval "$MOUNT_COMMAND"; then
-  log "ERROR: NFS mount failed"
-  report_status "failed" "NFS mount failed: $MOUNT_COMMAND"
-  exit 1
+declare -a WORK_DIRS=()
+
+if [ "$MULTI_EXPORT" -eq 1 ]; then
+  log "Mounting ${#ALL_MOUNT_CMDS[@]} NFS exports..."
+  for i in "${!ALL_MOUNT_CMDS[@]}"; do
+    cmd="${ALL_MOUNT_CMDS[$i]}"
+    mp="${ALL_MOUNT_POINTS[$i]}"
+    log "Mounting export $((i+1)): $cmd"
+    mkdir -p "$mp"
+
+    if ! eval "$cmd"; then
+      log "ERROR: NFS mount failed for export $((i+1)): $cmd"
+      report_status "failed" "NFS mount failed: $cmd"
+      exit 1
+    fi
+
+    if ! mountpoint -q "$mp"; then
+      log "ERROR: Mount point not active: $mp"
+      report_status "failed" "Mount point not active: $mp"
+      exit 1
+    fi
+
+    # Create per-node working directory on this export
+    work_dir="${mp}/fio-bench/${RUN_ID}/${NODE_ID}"
+    mkdir -p "$work_dir"
+    WORK_DIRS+=("$work_dir")
+    log "Export $((i+1)) mounted at $mp, work dir: $work_dir"
+  done
+else
+  log "Mounting NFS (single export): $MOUNT_COMMAND"
+  mkdir -p "$MOUNT_POINT"
+
+  if ! eval "$MOUNT_COMMAND"; then
+    log "ERROR: NFS mount failed"
+    report_status "failed" "NFS mount failed: $MOUNT_COMMAND"
+    exit 1
+  fi
+
+  if ! mountpoint -q "$MOUNT_POINT"; then
+    log "ERROR: Mount point not active after mount command"
+    report_status "failed" "Mount point not active: $MOUNT_POINT"
+    exit 1
+  fi
+
+  # Create per-node working directory
+  WORK_DIRS=("${MOUNT_POINT}/fio-bench/${RUN_ID}/${NODE_ID}")
+  mkdir -p "${WORK_DIRS[0]}"
 fi
 
-# Verify mount
-if ! mountpoint -q "$MOUNT_POINT"; then
-  log "ERROR: Mount point not active after mount command"
-  report_status "failed" "Mount point not active: $MOUNT_POINT"
-  exit 1
-fi
-
-log "NFS mounted successfully at $MOUNT_POINT"
+log "All NFS exports mounted successfully"
 log "Mount details:"
-mount | grep "$MOUNT_POINT"
-
-# Create per-node working directory
-WORK_DIR="${MOUNT_POINT}/fio-bench/${RUN_ID}/${NODE_ID}"
-mkdir -p "$WORK_DIR"
+mount | grep -E "$(IFS='|'; echo "${ALL_MOUNT_POINTS[*]}")" || true
 
 # --- Pull FIO job file ---
 log "Downloading job file from s3://${RESULTS_BUCKET}/${RESULTS_PREFIX}/job.fio"
 aws s3 cp "s3://${RESULTS_BUCKET}/${RESULTS_PREFIX}/job.fio" /tmp/job.fio --region "$REGION"
 
-# Override the directory in the job file to point to our NFS mount
-# This ensures FIO writes to the NFS filesystem under test
-sed -i "s|^directory=.*|directory=${WORK_DIR}|g" /tmp/job.fio
-# If no directory line exists, add it to the global section
-if ! grep -q "^directory=" /tmp/job.fio; then
-  sed -i "/^\[global\]/a directory=${WORK_DIR}" /tmp/job.fio
+# --- Assign directories to FIO jobs ---
+if [ "$MULTI_EXPORT" -eq 1 ] && [ ${#WORK_DIRS[@]} -gt 1 ]; then
+  # Multi-export mode: distribute jobs across work directories (round-robin).
+  # Remove any global directory= line; we'll set directory per-job section.
+  sed -i '/^\[global\]/,/^\[/{/^directory=/d}' /tmp/job.fio
+
+  # Count job sections (lines starting with [ but not [global])
+  mapfile -t JOB_SECTIONS < <(grep -n '^\[' /tmp/job.fio | grep -v '\[global\]')
+  NUM_JOBS=${#JOB_SECTIONS[@]}
+  NUM_EXPORTS=${#WORK_DIRS[@]}
+
+  log "Distributing $NUM_JOBS FIO job(s) across $NUM_EXPORTS exports (round-robin)"
+
+  # For each job section, insert a directory= line pointing to the assigned export
+  # Process in reverse order so line numbers don't shift
+  for (( i=NUM_JOBS-1; i>=0; i-- )); do
+    line_num=$(echo "${JOB_SECTIONS[$i]}" | cut -d: -f1)
+    export_idx=$((i % NUM_EXPORTS))
+    work_dir="${WORK_DIRS[$export_idx]}"
+    # Insert directory= on the line after the section header
+    sed -i "${line_num}a directory=${work_dir}" /tmp/job.fio
+  done
+else
+  # Single export mode: all jobs use the same directory
+  WORK_DIR="${WORK_DIRS[0]}"
+  sed -i "s|^directory=.*|directory=${WORK_DIR}|g" /tmp/job.fio
+  if ! grep -q "^directory=" /tmp/job.fio; then
+    sed -i "/^\[global\]/a directory=${WORK_DIR}" /tmp/job.fio
+  fi
 fi
 
 # --- Run FIO ---
@@ -226,10 +304,14 @@ set -e
 
 # --- Cleanup ---
 log "Cleaning up test files..."
-rm -rf "$WORK_DIR"
+for wd in "${WORK_DIRS[@]}"; do
+  rm -rf "$wd"
+done
 
 log "Unmounting NFS..."
-umount "$MOUNT_POINT" 2>/dev/null || true
+for mp in "${ALL_MOUNT_POINTS[@]}"; do
+  umount "$mp" 2>/dev/null || true
+done
 
 # Always report final status regardless of upload success
 if [ "$UPLOAD_FAILED" -eq 1 ]; then
