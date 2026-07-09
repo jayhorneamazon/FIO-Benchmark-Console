@@ -34,6 +34,12 @@ MOUNT_COMMAND=$(get_param "mount-command")
 STATUS_TABLE=$(get_param "status-table")
 MOUNT_POINT=$(echo "$MOUNT_COMMAND" | awk '{print $NF}')
 
+NODE_ID="${INSTANCE_ID}"
+
+log() {
+  echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $1"
+}
+
 # Multi-export mode: try to fetch the mount-commands JSON array.
 # If present, we mount multiple exports and distribute FIO jobs across them.
 MOUNT_COMMANDS_JSON=$(get_param "mount-commands" 2>/dev/null || echo "")
@@ -58,12 +64,6 @@ for c in cmds:
 else
   ALL_MOUNT_POINTS=("$MOUNT_POINT")
 fi
-
-NODE_ID="${INSTANCE_ID}"
-
-log() {
-  echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $1"
-}
 
 report_status() {
   local status=$1
@@ -222,8 +222,10 @@ aws s3 cp "s3://${RESULTS_BUCKET}/${RESULTS_PREFIX}/job.fio" /tmp/job.fio --regi
 # --- Assign directories to FIO jobs ---
 if [ "$MULTI_EXPORT" -eq 1 ] && [ ${#WORK_DIRS[@]} -gt 1 ]; then
   # Multi-export mode: distribute jobs across work directories (round-robin).
-  # Remove any global directory= line; we'll set directory per-job section.
-  sed -i '/^\[global\]/,/^\[/{/^directory=/d}' /tmp/job.fio
+  # Remove ALL directory= lines from the job file (global and per-section).
+  # buildMultiExportJobFile() puts placeholder paths that need replacing with
+  # actual per-node work directories.
+  sed -i '/^directory=/d' /tmp/job.fio
 
   # Count job sections (lines starting with [ but not [global])
   mapfile -t JOB_SECTIONS < <(grep -n '^\[' /tmp/job.fio | grep -v '\[global\]')
