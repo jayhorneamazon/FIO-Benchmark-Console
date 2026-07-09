@@ -3,7 +3,7 @@
  * Worker nodes read these on boot to know what to mount and where to upload.
  */
 
-import { SSMClient, PutParameterCommand, DeleteParameterCommand } from '@aws-sdk/client-ssm';
+import { SSMClient, PutParameterCommand } from '@aws-sdk/client-ssm';
 
 const ssm = new SSMClient({});
 
@@ -29,22 +29,12 @@ export async function handler(event: Event): Promise<{ success: boolean }> {
 
   // Store or clear the mount-commands parameter based on mode.
   // For multi-export: store the JSON array of all mount commands.
-  // For single-export: delete the parameter to prevent stale state from
-  // causing subsequent single-export runs to enter multi-export mode.
+  // For single-export: overwrite with sentinel "none" so the bootstrap script
+  // ignores it (avoids stale state from a previous multi-export run).
   if (event.mountCommands && event.mountCommands.length > 1) {
     params[`${PARAM_PREFIX}/mount-commands`] = JSON.stringify(event.mountCommands);
   } else {
-    // Delete the multi-export parameter if it exists (ignore if not found)
-    try {
-      await ssm.send(new DeleteParameterCommand({
-        Name: `${PARAM_PREFIX}/mount-commands`,
-      }));
-    } catch (err: unknown) {
-      // ParameterNotFound is expected when no previous multi-export run occurred
-      if (!(err instanceof Error && err.name === 'ParameterNotFound')) {
-        throw err;
-      }
-    }
+    params[`${PARAM_PREFIX}/mount-commands`] = 'none';
   }
 
   await Promise.all(

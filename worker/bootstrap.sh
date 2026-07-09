@@ -46,7 +46,7 @@ MOUNT_COMMANDS_JSON=$(get_param "mount-commands" 2>/dev/null || echo "")
 MULTI_EXPORT=0
 declare -a ALL_MOUNT_POINTS=()
 
-if [ -n "$MOUNT_COMMANDS_JSON" ] && [ "$MOUNT_COMMANDS_JSON" != "None" ]; then
+if [ -n "$MOUNT_COMMANDS_JSON" ] && [ "$MOUNT_COMMANDS_JSON" != "None" ] && [ "$MOUNT_COMMANDS_JSON" != "none" ]; then
   MULTI_EXPORT=1
   # Parse JSON array of mount commands using python (available on AL2023)
   mapfile -t ALL_MOUNT_CMDS < <(echo "$MOUNT_COMMANDS_JSON" | python3 -c "
