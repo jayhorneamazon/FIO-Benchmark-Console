@@ -29,7 +29,8 @@
         "Payload": {
           "runId.$": "$.runId",
           "resultsS3Prefix.$": "$.resultsS3Prefix",
-          "mountCommand.$": "$.mountCommand"
+          "mountCommand.$": "$.mountCommand",
+          "mountCommands.$": "$.mountCommands"
         }
       },
       "ResultPath": null,
