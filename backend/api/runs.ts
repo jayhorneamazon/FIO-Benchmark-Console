@@ -12,8 +12,8 @@ import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { EC2Client, DescribeInstancesCommand, DescribeInstanceStatusCommand } from '@aws-sdk/client-ec2';
 import { randomUUID } from 'crypto';
 import { BenchmarkRun, BenchmarkRunConfig, RunStatus } from '../../shared/types/benchmark-run';
-import { buildJobFile } from '../../shared/types/fio-config';
-import { buildMountCommand } from '../../shared/types/nfs-config';
+import { buildJobFile, buildMultiExportJobFile } from '../../shared/types/fio-config';
+import { buildMountCommand, buildAllMountCommands, getAllMountPoints } from '../../shared/types/nfs-config';
 import { validateNfsWorkloadMatch } from '../../shared/validation/nfs-workload-validator';
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -67,9 +67,15 @@ export async function createRun(event: APIGatewayProxyEventV2): Promise<APIGatew
     });
   }
 
-  // Generate job file and mount command
-  const jobFileContent = buildJobFile(config.fioGlobal, config.fioJobs);
+  // Generate job file and mount command(s)
   const mountCommand = buildMountCommand(config.nfs);
+  const mountCommands = buildAllMountCommands(config.nfs);
+  const mountPoints = getAllMountPoints(config.nfs);
+
+  // Use multi-export job file when multiple exports are configured
+  const jobFileContent = config.nfs.mountMode === 'multi-export' && mountPoints.length > 1
+    ? buildMultiExportJobFile(config.fioGlobal, config.fioJobs, mountPoints)
+    : buildJobFile(config.fioGlobal, config.fioJobs);
 
   const runId = randomUUID();
   const now = new Date().toISOString();
@@ -84,6 +90,7 @@ export async function createRun(event: APIGatewayProxyEventV2): Promise<APIGatew
     config,
     jobFileContent,
     mountCommand,
+    mountCommands: mountCommands.length > 1 ? mountCommands : undefined,
     nodes: [],
     resultsS3Prefix,
     createdAt: now,
@@ -114,7 +121,7 @@ export async function createRun(event: APIGatewayProxyEventV2): Promise<APIGatew
   await sfn.send(new StartExecutionCommand({
     stateMachineArn: STATE_MACHINE_ARN,
     name: `run-${runId}`,
-    input: JSON.stringify({ runId, config, resultsS3Prefix, mountCommand }),
+    input: JSON.stringify({ runId, config, resultsS3Prefix, mountCommand, mountCommands }),
   }));
 
   return json(201, {

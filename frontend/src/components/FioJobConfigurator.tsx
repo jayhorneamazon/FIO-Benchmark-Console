@@ -87,6 +87,16 @@ export const FioJobConfigurator: React.FC<Props> = ({
         </div>
       </div>
 
+      {/* Multi-export mode info banner */}
+      {nfsConfig.mountMode === 'multi-export' && (
+        <div className="multi-export-info" role="note">
+          <strong>Multi-export mode active:</strong> Your {jobs[0]?.numjobs || 1} numjobs will be
+          split across {1 + (nfsConfig.additionalExports?.length || 0)} NFS exports.
+          Each export gets ~{Math.max(1, Math.floor((jobs[0]?.numjobs || 1) / (1 + (nfsConfig.additionalExports?.length || 0))))} job(s).
+          To compare, create a second run with the same settings but &quot;Single Export&quot; mode.
+        </div>
+      )}
+
       {/* Preset selector */}
       <fieldset>
         <legend>Workload Presets</legend>

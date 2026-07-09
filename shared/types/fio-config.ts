@@ -172,3 +172,92 @@ export function buildCliArgs(global: FioGlobalConfig): string {
   if (global.statusInterval) args.push(`--status-interval=${global.statusInterval}`);
   return args.join(' ');
 }
+
+/**
+ * Generates a multi-export job file by splitting jobs across mount points.
+ *
+ * For multi-export comparison testing: takes the configured jobs and distributes
+ * them across the given mount points. Each job's numjobs is divided evenly across
+ * exports, with any remainder going to the first exports.
+ *
+ * Example: 1 job with numjobs=8 across 4 exports → 4 job sections, each with numjobs=2
+ *
+ * The directory for each split job is set to `<mountPoint>/fio-bench` as a placeholder.
+ * The actual per-run/per-node path is overridden by the bootstrap script at runtime.
+ *
+ * @param global - FIO global config
+ * @param jobs - Original job definitions
+ * @param mountPoints - Array of mount point paths (one per export)
+ * @returns Generated .fio job file content with per-export job sections
+ */
+export function buildMultiExportJobFile(
+  global: FioGlobalConfig,
+  jobs: FioJobConfig[],
+  mountPoints: string[],
+): string {
+  if (mountPoints.length <= 1) {
+    return buildJobFile(global, jobs);
+  }
+
+  const lines: string[] = [];
+
+  // Global section
+  lines.push('[global]');
+  if (global.writeBwLog) lines.push(`write_bw_log=${global.writeBwLog}`);
+  if (global.writeLatLog) lines.push(`write_lat_log=${global.writeLatLog}`);
+  if (global.writeIopsLog) lines.push(`write_iops_log=${global.writeIopsLog}`);
+  if (global.logAvgMsec) lines.push(`log_avg_msec=${global.logAvgMsec}`);
+  lines.push('');
+
+  // Split each job across exports
+  for (const job of jobs) {
+    const totalJobs = job.numjobs;
+    const basePerExport = Math.floor(totalJobs / mountPoints.length);
+    const remainder = totalJobs % mountPoints.length;
+
+    for (let i = 0; i < mountPoints.length; i++) {
+      const jobsForThisExport = basePerExport + (i < remainder ? 1 : 0);
+      if (jobsForThisExport === 0) continue;
+
+      const exportName = `${job.name}-export${i}`;
+      const directory = `${mountPoints[i]}/fio-bench`;
+
+      lines.push(`[${exportName}]`);
+      lines.push(`rw=${job.rw}`);
+      lines.push(`bs=${job.bs}`);
+      lines.push(`ioengine=${job.ioengine}`);
+      lines.push(`iodepth=${job.iodepth}`);
+      lines.push(`direct=${job.direct ? 1 : 0}`);
+      lines.push(`size=${job.size}`);
+      lines.push(`numjobs=${jobsForThisExport}`);
+      lines.push(`directory=${directory}`);
+
+      if (job.runtime) {
+        lines.push(`runtime=${job.runtime}`);
+        if (job.timeBased !== false) lines.push('time_based');
+      }
+
+      if (job.rwmixread !== undefined) lines.push(`rwmixread=${job.rwmixread}`);
+      if (job.nrfiles) lines.push(`nrfiles=${job.nrfiles}`);
+      if (job.filesize) lines.push(`filesize=${job.filesize}`);
+      if (job.percentageRandom !== undefined) lines.push(`percentage_random=${job.percentageRandom}`);
+      if (job.verify && job.verify !== 'none') lines.push(`verify=${job.verify}`);
+      if (job.groupReporting !== false) lines.push('group_reporting');
+      if (job.rate) lines.push(`rate=${job.rate}`);
+      if (job.rateIops) lines.push(`rate_iops=${job.rateIops}`);
+      if (job.bsrange) lines.push(`bsrange=${job.bsrange}`);
+      if (job.bssplit) lines.push(`bssplit=${job.bssplit}`);
+      if (job.fallocate) lines.push(`fallocate=${job.fallocate}`);
+
+      if (job.extraParams) {
+        for (const [key, value] of Object.entries(job.extraParams)) {
+          lines.push(`${key}=${value}`);
+        }
+      }
+
+      lines.push('');
+    }
+  }
+
+  return lines.join('\n');
+}

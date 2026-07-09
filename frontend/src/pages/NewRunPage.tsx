@@ -241,6 +241,26 @@ export const NewRunPage: React.FC = () => {
               <dl className="config-summary">
                 <dt>NFS Target</dt>
                 <dd>{nfsConfig.server}:{nfsConfig.exportPath} (v{nfsConfig.nfsVersion})</dd>
+
+                {nfsConfig.mountMode === 'multi-export' && nfsConfig.additionalExports?.length && (
+                  <>
+                    <dt>Mount Mode</dt>
+                    <dd>
+                      Multi-export ({1 + nfsConfig.additionalExports.length} exports)
+                      — jobs distributed across exports
+                    </dd>
+                    <dt>Exports</dt>
+                    <dd>
+                      <ol className="export-list">
+                        <li>{nfsConfig.exportPath} (primary)</li>
+                        {nfsConfig.additionalExports.map((exp, i) => (
+                          <li key={i}>{exp.exportPath || '(not configured)'}</li>
+                        ))}
+                      </ol>
+                    </dd>
+                  </>
+                )}
+
                 <dt>Workload</dt>
                 <dd>{fioJobs[0]?.rw} bs={fioJobs[0]?.bs} iodepth={fioJobs[0]?.iodepth} x{fioJobs[0]?.numjobs} jobs</dd>
                 <dt>Runtime</dt>
@@ -250,6 +270,15 @@ export const NewRunPage: React.FC = () => {
                 <dt>Mount Options</dt>
                 <dd>rsize={nfsConfig.rsize}, wsize={nfsConfig.wsize}, nconnect={nfsConfig.nconnect || 1}</dd>
               </dl>
+
+              {nfsConfig.mountMode === 'multi-export' && (
+                <div className="comparison-tip" role="note">
+                  <strong>Comparison tip:</strong> To measure the benefit of multiple exports,
+                  run this test first in single-export mode (same numjobs, one export),
+                  then again in multi-export mode. Compare the two runs on the Compare page
+                  to see throughput and latency differences.
+                </div>
+              )}
             </fieldset>
 
             {submitError && (

@@ -15,6 +15,7 @@ interface Event {
   runId: string;
   resultsS3Prefix: string;
   mountCommand: string;
+  mountCommands?: string[];
 }
 
 export async function handler(event: Event): Promise<{ success: boolean }> {
@@ -25,6 +26,11 @@ export async function handler(event: Event): Promise<{ success: boolean }> {
     [`${PARAM_PREFIX}/mount-command`]: event.mountCommand,
     [`${PARAM_PREFIX}/status-table`]: TABLE_NAME,
   };
+
+  // Store additional mount commands as a JSON array for multi-export mode
+  if (event.mountCommands && event.mountCommands.length > 1) {
+    params[`${PARAM_PREFIX}/mount-commands`] = JSON.stringify(event.mountCommands);
+  }
 
   await Promise.all(
     Object.entries(params).map(([name, value]) =>

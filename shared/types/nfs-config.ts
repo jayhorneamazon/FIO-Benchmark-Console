@@ -17,15 +17,48 @@ export type NfsMountHardness = 'hard' | 'soft' | 'softerr';
 
 export type NfsSecurityFlavor = 'sys' | 'krb5' | 'krb5i' | 'krb5p' | 'none';
 
+/**
+ * Mount mode controls how FIO jobs are distributed across NFS exports.
+ * - 'single': All jobs target one export (default, backwards-compatible)
+ * - 'multi-export': Jobs are spread across multiple exports from the same server.
+ *   Useful for testing whether parallelizing across exports improves throughput.
+ */
+export type NfsMountMode = 'single' | 'multi-export';
+
+/**
+ * An additional NFS export path to mount alongside the primary export.
+ * Inherits all mount options from the parent NfsMountConfig.
+ */
+export interface NfsAdditionalExport {
+  /** Export path on the server (e.g., /export/vol2) */
+  exportPath: string;
+
+  /** Local mount point. Auto-generated if not specified. */
+  mountPoint?: string;
+}
+
 export interface NfsMountConfig {
   /** NFS server hostname or IP */
   server: string;
 
-  /** Exported path on the server */
+  /** Exported path on the server (primary export) */
   exportPath: string;
 
-  /** Local mount point on worker nodes */
+  /** Local mount point on worker nodes (primary mount) */
   mountPoint: string;
+
+  /**
+   * Mount mode: single export or multiple exports.
+   * When 'multi-export', FIO jobs are distributed across all exports.
+   * Default: 'single'
+   */
+  mountMode?: NfsMountMode;
+
+  /**
+   * Additional exports from the same server for multi-export testing.
+   * Only used when mountMode is 'multi-export'.
+   */
+  additionalExports?: NfsAdditionalExport[];
 
   /** NFS protocol version */
   nfsVersion: NfsVersion;
@@ -135,4 +168,94 @@ export function buildMountCommand(config: NfsMountConfig): string {
 
   const optString = opts.join(',');
   return `mount -t nfs -o ${optString} ${config.server}:${config.exportPath} ${config.mountPoint}`;
+}
+
+/**
+ * Returns the mount options string (without server, export, or mount point).
+ * Used internally for building consistent mount commands across all exports.
+ */
+function buildMountOptions(config: NfsMountConfig): string {
+  const opts: string[] = [];
+
+  opts.push(`nfsvers=${config.nfsVersion}`);
+
+  if (config.transport) {
+    if (config.nfsVersion === '3') {
+      opts.push(`proto=${config.transport}`);
+    } else {
+      opts.push(config.transport);
+    }
+  }
+
+  if (config.rsize) opts.push(`rsize=${config.rsize}`);
+  if (config.wsize) opts.push(`wsize=${config.wsize}`);
+
+  if (config.mountHardness) {
+    opts.push(config.mountHardness);
+  }
+
+  if (config.timeo !== undefined) opts.push(`timeo=${config.timeo}`);
+  if (config.retrans !== undefined) opts.push(`retrans=${config.retrans}`);
+
+  if (config.attributeCaching === false) {
+    opts.push('noac');
+  } else {
+    if (config.acregmin !== undefined) opts.push(`acregmin=${config.acregmin}`);
+    if (config.acregmax !== undefined) opts.push(`acregmax=${config.acregmax}`);
+    if (config.acdirmin !== undefined) opts.push(`acdirmin=${config.acdirmin}`);
+    if (config.acdirmax !== undefined) opts.push(`acdirmax=${config.acdirmax}`);
+  }
+
+  if (config.nconnect && config.nconnect > 1) {
+    opts.push(`nconnect=${config.nconnect}`);
+  }
+
+  if (config.sec) opts.push(`sec=${config.sec}`);
+  if (config.cto === false) opts.push('nocto');
+  if (config.lock === false) opts.push('nolock');
+  if (config.rdirplus === false) opts.push('nordirplus');
+  if (config.extraOptions) opts.push(config.extraOptions);
+
+  return opts.join(',');
+}
+
+/**
+ * Returns all mount commands for the configuration.
+ * For 'single' mode, returns a single-element array.
+ * For 'multi-export' mode, returns one command per export (primary + additional).
+ */
+export function buildAllMountCommands(config: NfsMountConfig): string[] {
+  const optString = buildMountOptions(config);
+  const commands: string[] = [];
+
+  // Primary mount
+  commands.push(`mount -t nfs -o ${optString} ${config.server}:${config.exportPath} ${config.mountPoint}`);
+
+  // Additional exports (only in multi-export mode)
+  if (config.mountMode === 'multi-export' && config.additionalExports) {
+    for (let i = 0; i < config.additionalExports.length; i++) {
+      const exp = config.additionalExports[i];
+      const mountPoint = exp.mountPoint || `${config.mountPoint}-${i + 1}`;
+      commands.push(`mount -t nfs -o ${optString} ${config.server}:${exp.exportPath} ${mountPoint}`);
+    }
+  }
+
+  return commands;
+}
+
+/**
+ * Returns all mount points for the configuration.
+ * Useful for distributing FIO jobs across directories.
+ */
+export function getAllMountPoints(config: NfsMountConfig): string[] {
+  const points: string[] = [config.mountPoint];
+
+  if (config.mountMode === 'multi-export' && config.additionalExports) {
+    for (let i = 0; i < config.additionalExports.length; i++) {
+      const exp = config.additionalExports[i];
+      points.push(exp.mountPoint || `${config.mountPoint}-${i + 1}`);
+    }
+  }
+
+  return points;
 }
