@@ -450,6 +450,10 @@ export class FioBenchStack extends cdk.Stack {
         runId: sfn.JsonPath.stringAt('$.runId'),
         resultsS3Prefix: sfn.JsonPath.stringAt('$.resultsS3Prefix'),
         mountCommand: sfn.JsonPath.stringAt('$.mountCommand'),
+        // Pass the full mount-commands array so multi-export runs distribute
+        // FIO jobs across all exports. Always present in the execution input
+        // (single-element array for single-export runs).
+        mountCommands: sfn.JsonPath.listAt('$.mountCommands'),
       }),
       resultPath: sfn.JsonPath.DISCARD,
     });
