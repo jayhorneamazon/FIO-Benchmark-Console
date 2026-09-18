@@ -83,6 +83,9 @@ export class FioBenchStack extends cdk.Stack {
       sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecovery: true,
+      // Guard the benchmark history against accidental deletion. Note this
+      // means `cdk destroy` will fail until the table is manually disabled.
+      deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       timeToLiveAttribute: 'ttl',
     });
@@ -313,6 +316,9 @@ export class FioBenchStack extends cdk.Stack {
         mainFields: ['module', 'main'],
       },
       logRetention: logs.RetentionDays.TWO_WEEKS,
+      // Enable X-Ray active tracing across all functions for end-to-end
+      // visibility through the API and Step Functions orchestration pipeline.
+      tracing: lambda.Tracing.ACTIVE,
     };
 
     // --- Orchestration Lambdas ---
